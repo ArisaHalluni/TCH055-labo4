@@ -5,6 +5,8 @@ import java.sql.DriverManager;
 import java.sql.SQLException;
 import java.sql.*;
 import java.util.Scanner;
+import java.sql.Date;
+
 
 
 /**
@@ -247,47 +249,52 @@ public class Laboratoire4Menu {
      * @param affichage  : si false, la méthode ne fait aucun affichage ni arrêt
      * 
      */
-    public static float calculerPaiements(int numFacture , boolean affichage) {
-		float totalmontant= 0;
-
+	public static float calculerPaiements(int numFacture, boolean affichage) {
+		float totalmontant = 0;
 		try {
-			//Verifier si facture existe
-			String chkFacture = "SELECT COUNT(*) AS total FROM Facture WHERE id_facture =?";
+			// 1) Vérifier l'existence de la facture
+			String chkFacture = "SELECT COUNT(*) AS total FROM Facture WHERE id_facture = ?";
 			PreparedStatement checkSt = connexion.prepareStatement(chkFacture);
 			checkSt.setInt(1, numFacture);
 			ResultSet rs = checkSt.executeQuery();
 
-			if(rs.next() && rs.getInt("total")==0){
-				if(affichage){
+			if (rs.next() && rs.getInt("total") == 0) {
+				if (affichage) {
 					System.out.println("facture non trouvee ou vide");
-					System.out.println("Appuyez sur ENTER pour continuer ");
+					System.out.println("Appuyez sur ENTER pour continuer");
 					new Scanner(System.in).nextLine();
 				}
+				rs.close();
+				checkSt.close();
 				return -1;
 			}
+			rs.close();
+			checkSt.close();
 
-			//total des paiements pour la facture choisi
-			String requete = "SELECT SUM(montant) AS total_paiements FROM Paiement WHERE id_facture = ?";
-			PreparedStatement ps = connexion.prepareStatement(requete);
+			// 2) Somme des paiements existants
+			String sumSql = "SELECT SUM(montant) AS total_paiements FROM Paiement WHERE id_facture = ?";
+			PreparedStatement ps = connexion.prepareStatement(sumSql);
 			ps.setInt(1, numFacture);
-			rs = ps.executeQuery();
+			ResultSet rs2 = ps.executeQuery();
 
-			if (rs.next()) {
-				totalmontant = rs.getFloat("total_paiements");
+			if (rs2.next()) {
+				totalmontant = rs2.getFloat("total_paiements");
 			}
+			rs2.close();
+			ps.close();
+
 			if (affichage) {
-				System.out.printf("Total des paiements : %.2f $ \n", totalmontant);
+				System.out.printf("Total des paiements : %.2f $ %n", totalmontant);
 				System.out.println("Appuyez sur ENTER pour continuer");
 				new Scanner(System.in).nextLine();
 			}
+
+		} catch (SQLException e) {
+			System.out.println("Erreur lors du calcul des paiements : " + e.getMessage());
 		}
-		catch (SQLException e) {
-		System.out.println("Erreur lors du calcul des paiements : " + e.getMessage());
-	}
 		return totalmontant;
-
-    }
-
+	}
+	
     /** 
      * Option 5 -  Enregistrer un paiement 
      * Ajoute un paiement pour une facture 
@@ -295,37 +302,89 @@ public class Laboratoire4Menu {
      * @param numFacture : numéro de la facture pour laquelle est fait le paiement
      * 
      */
-    public static void enregistrerPaiement(int numFacture) { 
+	public static void enregistrerPaiement(int numFacture) {
+		Scanner sc = new Scanner(System.in);
+		try {
+			// 1) Récupérer montant + taxe
+			String sqlFact = "SELECT montant, taxe FROM Facture WHERE id_facture = ?";
+			PreparedStatement psFact = connexion.prepareStatement(sqlFact);
+			psFact.setInt(1, numFacture);
+			ResultSet rsFact = psFact.executeQuery();
 
-	Scanner sc= new Scanner(System.in);
+			if (!rsFact.next()) {
+				System.out.println("Facture non trouvee");
+				System.out.println("Appuyez sur ENTER pour continuer");
+				sc.nextLine();
+				rsFact.close();
+				psFact.close();
+				return;
+			}
 
-	// Methode pas termine!!!
-//	try{
-//		//Verifier si facture existe
-//		String sql = "SELECT montant, taxe FROM Facture WHERE id_facture = ?";
-//		PreparedStatement requete = connexion.prepareStatement(sql);
-//		requete.setInt(1, numFacture);
-//		ResultSet resultat = requete.executeQuery();
-//
-//		if(!resultat.next()){
-//			System.out.println("Facture non trouvee");
-//			System.out.println("Appuyez sur ENTER pour continuer");
-//			return;
-//		}
-//
-//		float montantFacture = resultat.getFloat("montant");
-//		float taxe =resultat.getFloat("taxe");
-//
-//	}
+			float montantFacture = rsFact.getFloat("montant");
+			float taxe = rsFact.getFloat("taxe");
+			rsFact.close();
+			psFact.close();
 
-    }
+			// 2) Total déjà payé
+			float totalPayes = calculerPaiements(numFacture, false);
 
-    /**
-     * 
-     *  
-     */
-    
-    /**
+			// 3) Saisie du nouveau paiement
+			System.out.print("Montant du paiement : ");
+			float montantNouveau = Float.parseFloat(sc.nextLine());
+
+			// 4) Vérification du dépassement
+			if (totalPayes + montantNouveau > montantFacture + taxe) {
+				System.out.println("Erreur : montant total (" + (totalPayes + montantNouveau)
+						+ ") dépasse le montant de la facture (" + (montantFacture + taxe) + ").");
+				System.out.println("Appuyez sur ENTER pour continuer");
+				sc.nextLine();
+				return;
+			}
+
+			// 5) Saisie du mode et exécution de l'INSERT
+			System.out.print("Mode (CASH, CHEQUE, CARTE) : ");
+			String mode = sc.nextLine().trim().toUpperCase();
+			String sqlInsert =
+					"INSERT INTO Paiement (id_facture, date_paiement, montant, mode_paiement, numero_cheque, numero_carte, date_expiration) "
+							+ "VALUES (?, ?, ?, ?, ?, ?, ?)";
+			PreparedStatement psPay = connexion.prepareStatement(sqlInsert);
+			psPay.setInt(1, numFacture);
+			psPay.setDate(2, new Date(System.currentTimeMillis()));
+			psPay.setFloat(3, montantNouveau);
+			psPay.setString(4, mode);
+
+			String numeroCheque = null, numeroCarte = null, dateExp = null;
+			if ("CHEQUE".equals(mode)) {
+				System.out.print("Numéro de chèque : ");
+				numeroCheque = sc.nextLine();
+			} else if ("CARTE".equals(mode)) {
+				System.out.print("Numéro de carte : ");
+				numeroCarte = sc.nextLine();
+				System.out.print("Date d'expiration (MM/AA) : ");
+				dateExp = sc.nextLine();
+			}
+			psPay.setString(5, numeroCheque);
+			psPay.setString(6, numeroCarte);
+			psPay.setString(7, dateExp);
+
+			int lignes = psPay.executeUpdate();
+			connexion.commit();
+			psPay.close();
+
+			System.out.println(lignes == 1
+					? "Paiement enregistré avec succès."
+					: "Échec de l'enregistrement du paiement.");
+
+		} catch (SQLException e) {
+			System.err.println("Erreur SQL : " + e.getMessage());
+			try { connexion.rollback(); } catch (SQLException ex) { /* ignore */ }
+		}
+		System.out.println("Appuyez sur ENTER pour continuer");
+		sc.nextLine();
+	}
+
+
+	/**
      * Option 6 : enregistre une liste d'évalutions dans la BD. Les données d'une évaluation sont des objets 
      * 			   SatisfactionData. 
      * 
@@ -333,9 +392,34 @@ public class Laboratoire4Menu {
      * 						   du client à insérer dans la BD
      */
     public static void enregistreEvaluation(SatisfactionData[] listEvaluation) {
-    	// Ligne suivante à supprimer après implémentation
-    	System.out.println("Option 6 : enregistreEvaluation() n'est pas implémentée");
-    }
+		Scanner sc = new Scanner(System.in);
+		try {
+			connexion.setAutoCommit(false);
+			String sqlEval =
+					"INSERT INTO Evaluation (id_facture, ref_produit, note, commentaire) VALUES (?, ?, ?, ?)";
+			PreparedStatement psEval = connexion.prepareStatement(sqlEval);
+			for (SatisfactionData sd : listEvaluation) {
+				psEval.setInt(1, sd.no_client);
+				psEval.setString(2, sd.ref_produit);
+				psEval.setInt(3, sd.note);
+				psEval.setString(4, sd.commentaire);
+				psEval.addBatch();
+			}
+			int[] res = psEval.executeBatch();
+			connexion.commit();
+			int count = 0;
+			for (int r : res) if (r >= 0) count++;
+			System.out.println(count + " évaluation(s) insérée(s).");
+			psEval.close();
+		} catch (SQLException e) {
+			try { connexion.rollback(); } catch (SQLException ex)
+			System.err.println("Erreur batch : " + e.getMessage());
+		} finally {
+			try { connexion.setAutoCommit(true); } catch (SQLException ex)
+		}
+		System.out.println("Appuyer sur ENTER pour continuer...");
+		sc.nextLine();
+	}
 
     /**
      * Question 9 - fermeture de la connexion   
